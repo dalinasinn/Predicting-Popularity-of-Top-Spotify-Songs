@@ -1,0 +1,542 @@
+---
+title: "Predicting Popularity of Top Spotify Songs"
+author: "Dalina Sinn"
+date: "`r Sys.Date()`"
+output:
+    html_document:
+      toc: true
+      toc_float: true
+      toc_depth: 4
+      code_folding: hide
+      df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+## Introduction
+The purpose of this project is to develop a model that will predict the popularity of Spotify songs. 
+
+### What is Spotify?
+Spotify is an audio streaming service that was founded on April 23, 2006 in Stockholm, Sweden by Daniel Ek and Martin Lorentzon. This service includes both music and podcasts with its main usage being for music. Spotify has millions of songs with collections of music providing both a free and premium option for its subscribers.
+
+```{r}
+knitr::include_graphics("images/spotifylogo.png")
+```
+
+
+### Why are we doing this?
+Music brings the world together but have you ever wondered what makes some of the songs you love so great? The research question I am proposing is "What characteristics in a song can be used to determine how popular it can get?" The main motive is to find key factors that affects virality and trends that could be followed. As an avid Spotify user, I catch myself playing certain songs on repeat and knowing all the words to some of the greatest hits. It would be interesting to see if there are patterns with these songs and if they are overlapping attributes. By creating a model, this will allow Spotify users to figure out common patterns in the top Spotify songs and what makes them great hits and provide insight to artists about what they can produce in hopes of making a popular song.
+
+```{r, out.width="70%", fig.align = "center"}
+knitr::include_graphics("images/taylorswift.png")
+```
+
+### Data Description
+The data set being used is from Kaggle and it is called "Top Spotify Songs From 2010-2019 By Year" created by Leonardo Henrique. With this data, I can analyze popular songs and create a model that find potential trends.  
+
+### Project Outline
+Let's discuss the plan for how to tackle this project. Fortunately, this data has been cleaned and there are no missing values. First, we will load the data and then perform exploratory data analysis. We will use all the predictors given and have `pop` be the response variable. `pop` indicates the value of how popular the song is with 0 being not popular and 100 being the most popular, which is a categorical variable. Linear Regression, Ridge Regression, K-Nearest Neighbors, Elastic Net, Random Forest, Support Vector Machine, and Boosted Trees. I will be used as models for the training data. From there, we will use it on the testing data to see how well our model actually did. 
+
+
+## Exploratory Data Analysis
+Before we start building models, we will begin with a general analysis of our data and figure out what we are working with.
+```{r}
+# Loading all necessary packages
+library(readr)
+library(janitor)
+library(dplyr)
+library(tidymodels)
+library(kknn)
+library(glmnet)
+library(corrr)
+library(corrplot)
+library(tidyverse)
+library(finalfit)
+library(kableExtra)
+library(kernlab)
+library(xgboost)
+```
+
+
+### Loading the Data
+```{r}
+# Loading the data
+spotify <- read_csv("top10s.csv", show_col_types = FALSE)
+
+# Cleaning predictor names
+spotify <- clean_names(spotify)
+set.seed(100)
+
+# Seeing first few rows of data set
+head(spotify)
+```
+
+```{r}
+dim(spotify)
+```
+
+There are 603 observations and 15 variables. This is a good amount of observations and the amount of predictors we have is also good. As for our predictors, we use `bpm`, `nrgy`, `dnce`, `d_b`, `live`, `val`, `dur`, `acous`, and `spch`. `pop` will be our response.
+
+### Missing and Tidying Data
+```{r}
+# Missing values (none)
+spotify %>%
+  missing_plot()
+```
+
+Luckily, there are no missing observations in our data set and we can use all the predictors for our model! As for tidying the data, the data set is pretty efficient and all components can and will be used. 
+
+### Describing the Variables
+After looking all the possible predictors, I have decided to keep all the numeric variables since they provide good insight on the response variable, `pop`. I decided not to use `top_genre` as a predictor because the majority of the songs fall under some category of pop (this will be shown in the Visual EDA portion). So, here are the variables that will be used:
+
+* `bpm`: Beats Per Minute - the tempo of the song
+* `nrgy`: Energy - the energy of the song, the higher the value, the more energetic the song
+* `dnce`: Danceability - the higher the value, the easier it is to dance to the song
+* `d_b`: Loudness - the higher the value, the louder the song
+* `live`: Liveness - the higher the value, the more likely the song is a live recording
+* `val`: Valence - the higher the value, the more positive mood for the song
+* `dur`: Length - the duration of the song
+* `acous`: Acousticness - the higher the value, the more acoustic the song is
+* `spch`: Speechiness - the higher the value, the more spoken word the song contains
+* `pop`: Popularity - the higher the value, the more popular the song is
+
+### Visual EDA
+
+#### Variable Correlation Plot
+Let's check out a correlation heat map to see if there is a relationship between the variables.
+
+```{r}
+spotify_numeric <- spotify %>%
+  select_if(is.numeric) %>%
+  select(-x1) %>%
+  select(-year)
+spotify_cor <- cor(spotify_numeric)
+spotify_cor_plt <- corrplot(spotify_cor, col = COL2("BrBG"))
+```
+
+When looking at the correlation plot, I thought that there would be more correlation between the variables. The ones that have a stronger correlation and the ones that were not correlated at strongly made sense. As shown above, there is a correlation between `d_b` and `nrgy` which makes sense because the louder the music, it would typically also mean that the energy of the song is higher. In addition, there is also a correlation between `val` and `dnce`. This is expected because most songs people dance too are typically more positive songs that are more upbeat. On the other hand, there is a negative correlation between `ngry` and `acous` which is also expected because 
+acoustic songs are much more mellow and would lack energy.
+
+#### Popularity of Spotify Songs Distribution
+```{r}
+spotify %>% 
+  ggplot(aes(x = pop)) +
+  geom_bar(fill = "darkseagreen") + 
+  labs(x = "Popularity", y = "# of Songs", title = "Distribution of Popularity of Spotify Songs")
+```
+
+For this data, we can see that most of the popularity for these Spotify Songs are right-skewed and that these songs are mostly very popular. According to the graph, most of these songs lie within the 60-80 range.
+
+#### Count of the Genres of Spotify Songs
+```{r}
+# Grouping genres into the most popular 3 and "Other" genre
+spotify$top_genre <- factor(spotify$top_genre)
+spotify$top_genre <- fct_lump(spotify$top_genre, n = 5, other_level = "other")
+```
+
+```{r}
+spotify %>% 
+  ggplot(aes(y = reorder(top_genre, top_genre, length))) +
+  geom_bar(fill = "darkseagreen4") +
+  labs(title = "Count of the Top Genres of Spotify Songs", y = "Genre") 
+```
+
+This plot shows that in our data set of top Spotify songs, there is an overwhelmingly amount of songs that go under the dance pop genre. The second genre (besides Other) with the most popular songs is pop. It is evident that the songs in this data is mostly ones that follow into some variation of the pop genre category (ex. Electropop, Canadian Pop, etc). Pop songs have catchy rhythms and lyrics that allow people to sing along. The chorus for these songs are repetitive, have lyrics that easy to remember, and are easy to listen to.
+
+
+## Setting Up Models
+It's time to set up our models! Let's finally see if we are able to predict a song's popularity based on these components. First, we will split the data, create a recipe, and then create folds for k-fold cross validation.
+
+### Splitting the Data
+To begin, we will split the data. 70% of our data will be for training and 30% for testing. We will be stratifying against the `pop` variable to make sure that the proportions are equal. The purpose of having a training set is pretty intuitive. It will be used to train our model. The testing data will be used to test how well our model did by introducing data that our model has not been exposed to before.
+```{r}
+set.seed(100)
+
+# Splitting the data (70% for training and 30% for testing), stratifying against the popularity
+spotify_split <- spotify %>%
+  initial_split(prop = 0.7, strata = "pop")
+
+# Training Data
+spotify_train <- training(spotify_split)
+
+# Testing Data
+spotify_test <- testing(spotify_split)
+```
+
+Verifying the split:
+```{r}
+nrow(spotify_train)/nrow(spotify)
+nrow(spotify_test)/nrow(spotify)
+```
+This shows that there is approximately 70% of our data in the training data and approximately 30% in the testing data.
+
+
+### Recipe Building
+Since we will be using the same predictors and response variable in all our models, we will create a general recipe to use. As we build this recipe, we can think of the recipe as the song and all the different components in the song as the ingredients. The different components can be the guitar, drums, singer, producer, etc. Each model could be remixes of the song since we would still be using the same recipe/song but it is applied differently. The categorical variables we have in our data is `year` but we will exclude this since it is not super relevant to what we are analyzing. The other categorical variable is `top_genre` but most of the songs are pop songs so genre would not play a significant role in predicting popularity of a song. Other than that, all of our predictors will be used in creating our recipe.
+
+```{r}
+spotify_recipe <- recipe(pop ~ bpm + nrgy + dnce + d_b + live + val + dur + acous + spch, data = spotify_train) %>%
+  # Normalizing
+  step_normalize(all_numeric_predictors()) %>% 
+  # Centering
+  step_center(all_predictors()) %>%
+  # Scaling
+  step_scale(all_predictors())
+
+prep(spotify_recipe) %>%
+  bake(new_data = spotify_train) %>%
+  kable() %>%
+  kable_styling(full_width = F) %>%
+  scroll_box(width = "100%", height = "200px")
+```
+### K-Fold Cross Validation
+By using k-fold cross validation, it will help with imbalanced data and making sure that our training sets have an accurate representation on our overall data. We will again stratify on the response variable, `pop`.
+
+```{r}
+set.seed(100)
+
+# Creating folds
+spotify_folds <- vfold_cv(spotify_train, v = 5, strata = pop)
+```
+
+With a 5-fold cross validation and a little over 600 observations in total, there will be approximately 120 observations in each fold. This should suffice with the amount of total observations we have. 
+
+## Model Building
+Linear Regression, Ridge Regression, K-Nearest Neighbors, Elastic Net, Random Forest, Support Vector Machine, and Boosted Trees will be the models I will be looking at.
+
+
+For this process, we will follow these steps to fit them:
+
+
+1) Set up the necessary models, tune the parameters, specify the engine, and note that it is a regression problem.
+
+```{r}
+# Linear Regression
+lm_model <- linear_reg() %>%
+  set_engine("lm")
+
+# Ridge Regression
+# Tuning penalty and letting mixture be set to 0 
+ridge_model <- linear_reg(mixture = 0,
+                          penalty = tune()) %>%
+  set_mode("regression") %>%
+  set_engine("glmnet")
+
+# K-Nearest Neighbors
+# Tuning neighbors
+knn_model <- nearest_neighbor(neighbors = tune()) %>%
+  set_mode("regression") %>%
+  set_engine("kknn")
+
+# Elastic Net
+# Tuning penalty and mixture
+en_model <- linear_reg(penalty = tune(),
+                       mixture = tune()) %>%
+  set_mode("regression") %>%
+  set_engine("glmnet")
+
+# Random Forest
+# Tuning mtry, trees, and min_n
+rf_model <- rand_forest(mtry = tune(), 
+                       trees = tune(), 
+                       min_n = tune()) %>% 
+  set_engine("ranger", importance = "impurity") %>% 
+  set_mode("regression")
+
+# Support Vector Machine
+# Tuning cost and letting degree be set to 1
+svm_model <- svm_poly(degree = 1, cost = tune()) %>%
+  set_engine("kernlab") %>%
+  set_mode("regression")
+
+# Boosted Trees
+# Tuning mtry, trees, and learn_rate
+bt_model <- boost_tree(mtry = tune(), 
+                       trees = tune(), 
+                       learn_rate = tune()) %>%
+  set_engine("xgboost") %>% 
+  set_mode("regression")
+```
+
+
+2) Set up workflows for the models.
+```{r}
+# Linear Regression
+lm_workflow <- workflow() %>%
+  add_model(lm_model) %>%
+  add_recipe(spotify_recipe)
+
+# Ridge Regression
+ridge_workflow <- workflow() %>%
+  add_model(ridge_model) %>%
+  add_recipe(spotify_recipe)
+
+# K-Nearest Neighbors
+knn_workflow <- workflow() %>%
+  add_model(knn_model) %>%
+  add_recipe(spotify_recipe)
+
+# Elastic Net
+en_workflow <- workflow() %>%
+  add_model(en_model) %>%
+  add_recipe(spotify_recipe)
+
+# Random Forest
+rf_workflow <- workflow() %>%
+  add_model(rf_model) %>%
+  add_recipe(spotify_recipe)
+
+# Support Vector Model
+svm_workflow <- workflow() %>% 
+  add_model(svm_model) %>%
+  add_recipe(spotify_recipe)
+
+# Boosted Trees
+bt_workflow <- workflow() %>% 
+  add_model(bt_model) %>% 
+  add_recipe(spotify_recipe)
+```
+
+3) Make a tuning grid and indicate the amount of levels for the models.
+```{r}
+# Linear Regression (N/A because there is no tuning parameters)
+
+# Ridge Regression
+ridge_grid <- grid_regular(penalty(range = c(0.1,5)), levels = 50)
+
+# K-Nearest Neighbors
+knn_grid <- grid_regular(neighbors(range = c(1,15)), levels = 5)
+
+# Elastic Net
+en_grid <- grid_regular(penalty(range = c(0.1, 5)), mixture(range = c(0,1)), levels = 10)
+
+# Random Forest
+rf_grid <- grid_regular(mtry(range = c(1, 9)), trees(range = c(200,1000)), min_n(range = c(5,20)), levels = 8)
+
+# Support Vector Machine
+svm_grid <- grid_regular(cost(), levels = 8)
+
+# Boosted Trees
+bt_grid <- grid_regular(mtry(range = c(1, 6)), 
+                        trees(range = c(200, 600)),
+                        learn_rate(range = c(-10, -1)),
+                        levels = 5)
+```
+
+
+4) Tune the model, add workflows, add k-folds, and the tuning grid for models.
+```{r, eval=FALSE}
+# Linear Regression (N/A because there is no tuning parameters)
+
+# Ridge Regression
+ridge_tune <- tune_grid(ridge_workflow,
+                      resamples = spotify_folds,
+                        grid = ridge_grid)
+
+# K-Nearest Neighbors
+knn_tune <- tune_grid(knn_workflow,
+                      resamples = spotify_folds,
+                        grid = knn_grid)
+
+# Elastic Net
+en_tune <- tune_grid(en_workflow,
+                     resamples = spotify_folds,
+                     grid = en_grid)
+
+# Random Forest
+rf_tune <- tune_grid(rf_workflow,
+                     resamples = spotify_folds,
+                     grid = rf_grid)
+
+# Support Vector Machine
+svm_tune <- tune_grid(svm_workflow,
+                     resamples = spotify_folds,
+                     grid = svm_grid)
+
+# Boosted Trees
+bt_tune <- tune_grid(bt_workflow, 
+                    resamples = spotify_folds, 
+                    grid = bt_grid)
+```
+
+
+5) Save and load files.
+```{r, eval=FALSE}
+# Linear Regression (N/A because there is no tuning parameters)
+
+# Ridge Regression
+save(ridge_tune, file = "ridge_tune.rda")
+
+
+# K-Nearest Neighbors
+save(knn_tune, file = "knn_tune.rda")
+
+
+# Elastic Net
+save(en_tune, file = "en_tune.rda")
+
+
+# Random Forest
+save(rf_tune, file = "rf_tune.rda")
+
+# Support Vector Machine
+save(svm_tune, file = "svm_tune.rda")
+
+# Boosted Trees
+save(bt_tune, file = "bt_tune.rda")
+```
+
+
+```{r}
+load("ridge_tune.rda")
+load("knn_tune.rda")
+load("en_tune.rda")
+load("rf_tune.rda")
+load("svm_tune.rda")
+load("bt_tune.rda")
+```
+
+
+
+6) Collect the metrics and see which ones have the lowest RMSE.
+
+```{r}
+# Linear Regression
+lm_fit <- fit_resamples(lm_workflow, resamples = spotify_folds)
+
+(lm_rmse <- show_best(lm_fit, metric = "rmse"))
+
+# Ridge Regression
+(ridge_rmse <- show_best(ridge_tune, metric = "rmse", n = 1))
+
+# K-Nearest Neighbor
+(knn_rmse <- show_best(knn_tune, metric = "rmse", n = 1))
+
+# Elastic Net
+(en_rmse <- show_best(en_tune, metric = "rmse", n = 1))
+
+# Random Forest
+(rf_rmse <- show_best(rf_tune, metric = "rmse", n = 1))
+
+# Support Vector Machine
+(svm_rmse <- show_best(svm_tune, metric = "rmse", n = 1))
+
+# Boosted Trees
+(bt_rmse <- show_best(bt_tune, metric = "rmse", n = 1))
+```
+
+## Model Results
+Let's find out which one of our models performed the best! We can find this by looking at the lowest RMSE value.
+
+```{r}
+# Tibble comparing all of RMSE values
+tibble_rmse <- tibble(Model = c("Linear Regression", "Ridge Regression", "K-Nearest Neighbors", "Elastic Net", "Random Forest", "Support Vector Machine", "Boosted Trees"), RMSE = c(lm_rmse$mean, ridge_rmse$mean, knn_rmse$mean, en_rmse$mean, rf_rmse$mean, svm_rmse$mean, bt_rmse$mean)) %>%
+  arrange(RMSE)
+
+tibble_rmse
+```
+
+From this chart, we can tell that K-Nearest Neighbors performed the best because it had the lowest RMSE value. The next three best models were Random Forest, Ridge Regression, and Elastic Net. 
+
+### Model Autoplots
+Autoplots are a great way to see how each model performed and how tuning the parameters influenced the models. We can determine how well the models did for regression problems by looking at the RMSE. Low RMSE are indicated as better than models with high RMSE.
+
+#### K-Nearest Neighbors
+```{r}
+autoplot(knn_tune, metric = "rmse")
+```
+The K-Nearest Neighbors model was tuned to 5 levels. This plot shows that with more nearest neighbors, the model does better. It has a pretty high RMSE with 1 nearest neighbors and it decreases as more neighbors are added. From this graph, we can see that the best would be with 15 neighbors.
+
+#### Random Forest Autoplot
+```{r}
+autoplot(rf_tune, metric = "rmse")
+```
+The Random Forest model has `mtry`, `trees`, and `min_n` tuned and contains 8 levels. From the plot, it can be seen that the number of trees do not have that much of an impact on the model. Regardless of the number, they all follow an increasing line with a slight curve. The minimal node size also does not have a huge impact on the model since they also all have the same appearance. However, it is noticeable that the number of randomly selected predictors does have an influence on the RMSE. The less predictors we have, the lower the RMSE.
+
+#### Ridge Regression Autoplot
+```{r}
+autoplot(ridge_tune, metric = "rmse")
+```
+
+The Ridge Regression model has penalty tuned and we set mixture equal to 0. In this plot, we can see that the amount of regularization decreases pretty quickly and then increases again, ending with a stabilizing line.
+
+## Best Model Result
+
+### Performance on the Folds
+Let's take a look on what our best model is.
+```{r}
+(knn_rmse <- show_best(knn_tune, metric = "rmse", n = 1))
+```
+Let's give a Grammy to KNN Model 5 with 15 neighbors and a mean of 14.16711 which did the best out of all the models!
+
+```{r, out.height = "50%",fig.align='center'}
+knitr::include_graphics("images/harrystyles.png")
+```
+
+
+### Fitting to Training Data
+Since KNN Model 5 is our best model, we will now use it to fit to our training data.
+```{r}
+final_knn <- select_best(knn_tune, metric = "rmse")
+
+final_knn_workflow <- finalize_workflow(knn_workflow, final_knn)
+
+final_knn_fit <- fit(final_knn_workflow, data = spotify_train)
+
+save(final_knn_fit, file = "final_knn_fit.rda")
+load("final_knn_fit.rda")
+```
+
+### Testing the Model
+Now that it has been fitted, we will use it on our testing data to see how well our model performed!
+```{r}
+spotify_tibble <- predict(final_knn_fit, new_data = spotify_test
+                          %>% select(-pop))
+spotify_tibble <- bind_cols(spotify_tibble, spotify_test %>% select(pop))
+
+spotify_tibble
+```
+
+```{r}
+final_knn_test <- augment(final_knn_fit, spotify_test)
+rmse(final_knn_test, truth = pop, .pred)
+```
+Our model didn't perform as well on our testing data as it did on our training but the RMSE scores were similar! To recall, the RMSE for our training set was 14.16711 and on our testing it is 15.12975. It is not the best but it did a decent job.
+
+
+This is a scatterplot of the actual popularity values in the testing set versus the model-predicted values:
+```{r}
+spotify_tibble %>% 
+  ggplot(aes(x = .pred, y = pop)) +
+  geom_point(alpha = 0.5) +
+  geom_abline(lty = 2) + 
+  coord_obs_pred() +
+  theme_minimal()
+```
+
+When we look at the plot, we can see that our model did not do the best job at predicting the popularity value but it did not do the worst either. A few points were able to be on the line which is good but the majority of the points are not. A couple reasons why the model is not insanely accurate could be that the data might be slightly imbalanced, even after doing the k-fold cross validation. If our testing data was imbalanced, this would lead to the KNN model being biased towards the majority value. KNN is also prone to overfitting or underfitting the data so this may also be the issue.
+
+## Conclusion
+By exploring the data, building several machine learning models, and analyzing the outcomes, the best model to predict the popularity of Spotify songs is K-Nearest Neighbors. However, this model did not work perfectly and could be improved.
+
+
+As for improvements, I should have considered including the `year` and creating subsets of the data based on that. Music is always changing and trends do change from year to year so the attributes that would make a song more popular could vary. By including the year, a stratified sample could be obtained so that there is a more accurate representation of the commonalities between all the songs and the years. 
+
+
+Another improvement I could have made would be creating a more elaborate recipe and having a more diverse dataset. With the majority of the dataset having the similar popularity scores, this may have created a biased outcome and made it more difficult to stratify. This would make it harder to train the model and producing an inaccurate prediction.
+
+
+In general, my next step would be to continue working and hopefully implement the improvements I mentioned. I think it would be super cool and useful if I am able to lower my RMSE value and have a model that could get really close to predicting more popularity scores with recent data. Overall, this was a great opportunity to work on my machine learning skills and finding myself extremely passionate in creating more projects that involve machine learning. Hopefully, I can utilize the skills learned to make more projects and models that are worth a Grammy in my book!
+
+```{r, fig.align='center'}
+knitr::include_graphics("images/beyonce.png")
+```
+
+
+## Sources
+The data set was called [Top Spotify Songs From 2010-2019 By Year](https://www.kaggle.com/datasets/leonardopena/top-spotify-songs-from-20102019-by-year?datasetId=456949&sortBy=voteCount) by Leonardo Henrique and it was retrieved from Kaggle.
+
+Information in the introduction was from prior knowledge and from the [Spotify site](open.spotify.com).
+
